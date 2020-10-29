@@ -6144,7 +6144,7 @@ static int disas_neon_data_insn(DisasContext *s, uint32_t insn)
                         val = 0;
                         for (n = 0; n < 4; n++) {
                             if (imm & (1 << (n + (pass & 1) * 4)))
-                                val |= 0xff << (n * 8);
+                                val |= 0xffU << (n * 8);
                         }
                         tcg_gen_movi_i32(tcg_ctx, tmp, val);
                     } else {
@@ -7857,7 +7857,7 @@ static void disas_arm_insn(DisasContext *s, unsigned int insn)  // qq
             /* Sign-extend the 24-bit offset */
             offset = ((int32_t)(insn << 8)) >> 8;
             /* offset * 4 + bit24 * 2 + (thumb bit) */
-            val += (offset << 2) | ((insn >> 23) & 2) | 1;
+            val += (((uint32_t)offset) << 2) | ((insn >> 23) & 2) | 1;
             /* pipeline offset */
             val += 4;
             /* protected by ARCH(5); above, near the start of uncond block */
@@ -11127,7 +11127,7 @@ static void disas_thumb_insn(CPUARMState *env, DisasContext *s) // qq
         /* jump to the offset */
         val = (uint32_t)s->pc + 2;
         offset = ((int32_t)((uint32_t)insn << 24)) >> 24;
-        val += offset << 1;
+        val += (int32_t)((uint32_t)offset << 1);
         gen_jmp(s, val);
         break;
 
@@ -11140,7 +11140,7 @@ static void disas_thumb_insn(CPUARMState *env, DisasContext *s) // qq
         /* unconditional branch */
         val = (uint32_t)s->pc;
         offset = ((int32_t)((uint32_t)insn << 21)) >> 21;
-        val += (offset << 1) + 2;
+        val += (int32_t)((uint32_t)offset << 1) + 2;
         gen_jmp(s, val);
         break;
 
@@ -11268,8 +11268,6 @@ static inline void gen_intermediate_code_internal(ARMCPU *cpu,
     // Only hook this block if it is not broken from previous translation due to
     // full translation cache
     if (!env->uc->block_full && HOOK_EXISTS_BOUNDED(env->uc, UC_HOOK_BLOCK, pc_start)) {
-        // save block address to see if we need to patch block size later
-        env->uc->block_addr = pc_start;
         env->uc->size_arg = tcg_ctx->gen_opparam_buf - tcg_ctx->gen_opparam_ptr + 1;
         gen_uc_tracecode(tcg_ctx, 0xf8f8f8f8, UC_HOOK_BLOCK_IDX, env->uc, pc_start);
     } else {
@@ -11563,62 +11561,6 @@ void gen_intermediate_code_pc(CPUARMState *env, TranslationBlock *tb)
 {
     gen_intermediate_code_internal(arm_env_get_cpu(env), tb, true);
 }
-
-#if 0
-static const char *cpu_mode_names[16] = {
-  "usr", "fiq", "irq", "svc", "???", "???", "mon", "abt",
-  "???", "???", "hyp", "und", "???", "???", "???", "sys"
-};
-
-void arm_cpu_dump_state(CPUState *cs, FILE *f, fprintf_function cpu_fprintf,
-                        int flags)
-{
-    ARMCPU *cpu = ARM_CPU(cs);
-    CPUARMState *env = &cpu->env;
-    int i;
-    uint32_t psr;
-
-    if (is_a64(env)) {
-        aarch64_cpu_dump_state(cs, f, cpu_fprintf, flags);
-        return;
-    }
-
-    for(i=0;i<16;i++) {
-        cpu_fprintf(f, "R%02d=%08x", i, env->regs[i]);
-        if ((i % 4) == 3)
-            cpu_fprintf(f, "\n");
-        else
-            cpu_fprintf(f, " ");
-    }
-    psr = cpsr_read(env);
-    cpu_fprintf(f, "PSR=%08x %c%c%c%c %c %s%d\n",
-                psr,
-                psr & (1 << 31) ? 'N' : '-',
-                psr & (1 << 30) ? 'Z' : '-',
-                psr & (1 << 29) ? 'C' : '-',
-                psr & (1 << 28) ? 'V' : '-',
-                psr & CPSR_T ? 'T' : 'A',
-                cpu_mode_names[psr & 0xf], (psr & 0x10) ? 32 : 26);
-
-    if (flags & CPU_DUMP_FPU) {
-        int numvfpregs = 0;
-        if (arm_feature(env, ARM_FEATURE_VFP)) {
-            numvfpregs += 16;
-        }
-        if (arm_feature(env, ARM_FEATURE_VFP3)) {
-            numvfpregs += 16;
-        }
-        for (i = 0; i < numvfpregs; i++) {
-            uint64_t v = float64_val(env->vfp.regs[i]);
-            cpu_fprintf(f, "s%02d=%08x s%02d=%08x d%02d=%016" PRIx64 "\n",
-                        i * 2, (uint32_t)v,
-                        i * 2 + 1, (uint32_t)(v >> 32),
-                        i, v);
-        }
-        cpu_fprintf(f, "FPSCR: %08x\n", (int)env->vfp.xregs[ARM_VFP_FPSCR]);
-    }
-}
-#endif
 
 void restore_state_to_opc(CPUARMState *env, TranslationBlock *tb, int pc_pos)
 {

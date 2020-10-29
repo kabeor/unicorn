@@ -239,6 +239,9 @@ static int cpu_gen_code(CPUArchState *env, TranslationBlock *tb, int *gen_code_s
     s->code_time -= profile_getclock();
 #endif
     gen_code_size = tcg_gen_code(s, gen_code_buf);
+    if (gen_code_size == -1) {
+        return -1;
+    }
     //printf(">>> code size = %u: ", gen_code_size);
     //int i;
     //for (i = 0; i < gen_code_size; i++) {
@@ -1130,6 +1133,7 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
     TranslationBlock *tb;
     tb_page_addr_t phys_pc, phys_page2;
     int code_gen_size;
+    int ret;
 
     phys_pc = get_page_addr_code(env, pc);
     tb = tb_alloc(env->uc, pc);
@@ -1145,7 +1149,11 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
     tb->cs_base = cs_base;
     tb->flags = flags;
     tb->cflags = cflags;
-    cpu_gen_code(env, tb, &code_gen_size);  // qq
+    ret = cpu_gen_code(env, tb, &code_gen_size);  // qq
+    if (ret == -1) {
+        tb_free(env->uc, tb);
+        return NULL;
+    }
     tcg_ctx->code_gen_ptr = (void *)(((uintptr_t)tcg_ctx->code_gen_ptr +
             code_gen_size + CODE_GEN_ALIGN - 1) & ~(CODE_GEN_ALIGN - 1));
 
@@ -1189,7 +1197,7 @@ void tb_invalidate_phys_page_range(struct uc_struct *uc, tb_page_addr_t start, t
                                    int is_cpu_write_access)
 {
     TranslationBlock *tb, *tb_next, *saved_tb;
-    CPUState *cpu = uc->current_cpu;
+    CPUState *cpu = uc->cpu;
 #if defined(TARGET_HAS_PRECISE_SMC)
     CPUArchState *env = NULL;
 #endif
@@ -1312,7 +1320,7 @@ static void tb_invalidate_phys_page(struct uc_struct *uc, tb_page_addr_t addr,
     int n;
 #ifdef TARGET_HAS_PRECISE_SMC
     TranslationBlock *current_tb = NULL;
-    CPUState *cpu = uc->current_cpu;
+    CPUState *cpu = uc->cpu;
     CPUArchState *env = NULL;
     int current_tb_modified = 0;
     target_ulong current_pc = 0;
@@ -1549,8 +1557,7 @@ void tb_invalidate_phys_addr(AddressSpace *as, hwaddr addr)
     hwaddr l = 1;
 
     mr = address_space_translate(as, addr, &addr, &l, false);
-    if (!(memory_region_is_ram(mr)
-          || memory_region_is_romd(mr))) {
+    if (!memory_region_is_ram(mr)) {
         return;
     }
     ram_addr = (ram_addr_t)((memory_region_get_ram_addr(mr) & TARGET_PAGE_MASK)

@@ -202,17 +202,21 @@ WORD_TYPE helper_le_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
 #if defined(SOFTMMU_CODE_ACCESS)
         error_code = UC_ERR_FETCH_UNMAPPED;
         HOOK_FOREACH(uc, hook, UC_HOOK_MEM_FETCH_UNMAPPED) {
+            if (hook->to_delete)
+                continue;
             if (!HOOK_BOUND_CHECK(hook, addr))
                 continue;
-            if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_FETCH_UNMAPPED, addr, DATA_SIZE, 0, hook->user_data)))
+            if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_FETCH_UNMAPPED, addr, DATA_SIZE - uc->size_recur_mem, 0, hook->user_data)))
                 break;
         }
 #else
         error_code = UC_ERR_READ_UNMAPPED;
         HOOK_FOREACH(uc, hook, UC_HOOK_MEM_READ_UNMAPPED) {
+            if (hook->to_delete)
+                continue;
             if (!HOOK_BOUND_CHECK(hook, addr))
                 continue;
-            if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_READ_UNMAPPED, addr, DATA_SIZE, 0, hook->user_data)))
+            if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_READ_UNMAPPED, addr, DATA_SIZE - uc->size_recur_mem, 0, hook->user_data)))
                 break;
         }
 #endif
@@ -223,7 +227,7 @@ WORD_TYPE helper_le_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
             env->invalid_addr = addr;
             env->invalid_error = error_code;
             // printf("***** Invalid fetch (unmapped memory) at " TARGET_FMT_lx "\n", addr);
-            cpu_exit(uc->current_cpu);
+            cpu_exit(uc->cpu);
             return 0;
         }
     }
@@ -233,9 +237,11 @@ WORD_TYPE helper_le_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
     if (mr != NULL && !(mr->perms & UC_PROT_EXEC)) {  // non-executable
         handled = false;
         HOOK_FOREACH(uc, hook, UC_HOOK_MEM_FETCH_PROT) {
+            if (hook->to_delete)
+                continue;
             if (!HOOK_BOUND_CHECK(hook, addr))
                 continue;
-            if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_FETCH_PROT, addr, DATA_SIZE, 0, hook->user_data)))
+            if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_FETCH_PROT, addr, DATA_SIZE - uc->size_recur_mem, 0, hook->user_data)))
                 break;
         }
 
@@ -245,7 +251,7 @@ WORD_TYPE helper_le_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
             env->invalid_addr = addr;
             env->invalid_error = UC_ERR_FETCH_PROT;
             // printf("***** Invalid fetch (non-executable) at " TARGET_FMT_lx "\n", addr);
-            cpu_exit(uc->current_cpu);
+            cpu_exit(uc->cpu);
             return 0;
         }
     }
@@ -257,10 +263,14 @@ WORD_TYPE helper_le_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
     // See UC_HOOK_MEM_READ_AFTER & UC_MEM_READ_AFTER if you only care
     // about successful read
     if (READ_ACCESS_TYPE == MMU_DATA_LOAD) {
-        HOOK_FOREACH(uc, hook, UC_HOOK_MEM_READ) {
-            if (!HOOK_BOUND_CHECK(hook, addr))
-                continue;
-            ((uc_cb_hookmem_t)hook->callback)(env->uc, UC_MEM_READ, addr, DATA_SIZE, 0, hook->user_data);
+        if (!uc->size_recur_mem) { // disabling read callback if in recursive call
+            HOOK_FOREACH(uc, hook, UC_HOOK_MEM_READ) {
+              if (hook->to_delete)
+                  continue;
+              if (!HOOK_BOUND_CHECK(hook, addr))
+                    continue;
+                ((uc_cb_hookmem_t)hook->callback)(env->uc, UC_MEM_READ, addr, DATA_SIZE, 0, hook->user_data);
+            }
         }
     }
 
@@ -268,9 +278,11 @@ WORD_TYPE helper_le_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
     if (READ_ACCESS_TYPE == MMU_DATA_LOAD && mr != NULL && !(mr->perms & UC_PROT_READ)) {  //non-readable
         handled = false;
         HOOK_FOREACH(uc, hook, UC_HOOK_MEM_READ_PROT) {
+            if (hook->to_delete)
+                continue;
             if (!HOOK_BOUND_CHECK(hook, addr))
                 continue;
-            if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_READ_PROT, addr, DATA_SIZE, 0, hook->user_data)))
+            if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_READ_PROT, addr, DATA_SIZE - uc->size_recur_mem, 0, hook->user_data)))
                 break;
         }
 
@@ -280,7 +292,7 @@ WORD_TYPE helper_le_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
             env->invalid_addr = addr;
             env->invalid_error = UC_ERR_READ_PROT;
             // printf("***** Invalid memory read (non-readable) at " TARGET_FMT_lx "\n", addr);
-            cpu_exit(uc->current_cpu);
+            cpu_exit(uc->cpu);
             return 0;
         }
     }
@@ -304,7 +316,7 @@ WORD_TYPE helper_le_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
 #else
             env->invalid_error = UC_ERR_READ_UNALIGNED;
 #endif
-            cpu_exit(uc->current_cpu);
+            cpu_exit(uc->cpu);
             return 0;
         }
 #endif
@@ -326,7 +338,7 @@ WORD_TYPE helper_le_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
             env->invalid_addr = addr;
             env->invalid_error = UC_ERR_READ_UNMAPPED;
             // printf("Invalid memory read at " TARGET_FMT_lx "\n", addr);
-            cpu_exit(env->uc->current_cpu);
+            cpu_exit(env->uc->cpu);
             return 0;
         } else {
             env->invalid_error = UC_ERR_OK;
@@ -356,15 +368,18 @@ WORD_TYPE helper_le_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
 #else
         env->invalid_error = UC_ERR_READ_UNALIGNED;
 #endif
-        cpu_exit(uc->current_cpu);
+        cpu_exit(uc->cpu);
         return 0;
 #endif
         addr1 = addr & ~(DATA_SIZE - 1);
         addr2 = addr1 + DATA_SIZE;
         /* Note the adjustment at the beginning of the function.
            Undo that for the recursion.  */
+        uc->size_recur_mem = DATA_SIZE - (addr - addr1); // size already treated by callback
         res1 = helper_le_ld_name(env, addr1, mmu_idx, retaddr + GETPC_ADJ);
+        uc->size_recur_mem = (addr2 - addr);
         res2 = helper_le_ld_name(env, addr2, mmu_idx, retaddr + GETPC_ADJ);
+        uc->size_recur_mem = 0;
         shift = (addr & (DATA_SIZE - 1)) * 8;
 
         /* Little-endian combine.  */
@@ -383,7 +398,7 @@ WORD_TYPE helper_le_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
 #else
         env->invalid_error = UC_ERR_READ_UNALIGNED;
 #endif
-        cpu_exit(uc->current_cpu);
+        cpu_exit(uc->cpu);
         return 0;
     }
 #endif
@@ -398,10 +413,14 @@ WORD_TYPE helper_le_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
 _out:
     // Unicorn: callback on successful read
     if (READ_ACCESS_TYPE == MMU_DATA_LOAD) {
-        HOOK_FOREACH(uc, hook, UC_HOOK_MEM_READ_AFTER) {
-            if (!HOOK_BOUND_CHECK(hook, addr))
-                continue;
-            ((uc_cb_hookmem_t)hook->callback)(env->uc, UC_MEM_READ_AFTER, addr, DATA_SIZE, res, hook->user_data);
+        if (!uc->size_recur_mem) { // disabling read callback if in recursive call
+            HOOK_FOREACH(uc, hook, UC_HOOK_MEM_READ_AFTER) {
+              if (hook->to_delete)
+                  continue;
+              if (!HOOK_BOUND_CHECK(hook, addr))
+                    continue;
+                ((uc_cb_hookmem_t)hook->callback)(env->uc, UC_MEM_READ_AFTER, addr, DATA_SIZE, res, hook->user_data);
+            }
         }
     }
 
@@ -433,17 +452,21 @@ WORD_TYPE helper_be_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
 #if defined(SOFTMMU_CODE_ACCESS)
         error_code = UC_ERR_FETCH_UNMAPPED;
         HOOK_FOREACH(uc, hook, UC_HOOK_MEM_FETCH_UNMAPPED) {
+            if (hook->to_delete)
+                continue;
             if (!HOOK_BOUND_CHECK(hook, addr))
                 continue;
-            if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_FETCH_UNMAPPED, addr, DATA_SIZE, 0, hook->user_data)))
+            if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_FETCH_UNMAPPED, addr, DATA_SIZE - uc->size_recur_mem, 0, hook->user_data)))
                 break;
         }
 #else
         error_code = UC_ERR_READ_UNMAPPED;
         HOOK_FOREACH(uc, hook, UC_HOOK_MEM_READ_UNMAPPED) {
+            if (hook->to_delete)
+                continue;
             if (!HOOK_BOUND_CHECK(hook, addr))
                 continue;
-            if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_READ_UNMAPPED, addr, DATA_SIZE, 0, hook->user_data)))
+            if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_READ_UNMAPPED, addr, DATA_SIZE - uc->size_recur_mem, 0, hook->user_data)))
                 break;
         }
 #endif
@@ -454,7 +477,7 @@ WORD_TYPE helper_be_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
             env->invalid_addr = addr;
             env->invalid_error = error_code;
             // printf("***** Invalid fetch (unmapped memory) at " TARGET_FMT_lx "\n", addr);
-            cpu_exit(uc->current_cpu);
+            cpu_exit(uc->cpu);
             return 0;
         }
     }
@@ -464,9 +487,11 @@ WORD_TYPE helper_be_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
     if (mr != NULL && !(mr->perms & UC_PROT_EXEC)) {  // non-executable
         handled = false;
         HOOK_FOREACH(uc, hook, UC_HOOK_MEM_FETCH_PROT) {
+            if (hook->to_delete)
+                continue;
             if (!HOOK_BOUND_CHECK(hook, addr))
                 continue;
-            if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_FETCH_PROT, addr, DATA_SIZE, 0, hook->user_data)))
+            if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_FETCH_PROT, addr, DATA_SIZE - uc->size_recur_mem, 0, hook->user_data)))
                 break;
         }
 
@@ -476,7 +501,7 @@ WORD_TYPE helper_be_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
             env->invalid_addr = addr;
             env->invalid_error = UC_ERR_FETCH_PROT;
             // printf("***** Invalid fetch (non-executable) at " TARGET_FMT_lx "\n", addr);
-            cpu_exit(uc->current_cpu);
+            cpu_exit(uc->cpu);
             return 0;
         }
     }
@@ -488,10 +513,14 @@ WORD_TYPE helper_be_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
     // See UC_HOOK_MEM_READ_AFTER & UC_MEM_READ_AFTER if you only care
     // about successful read
     if (READ_ACCESS_TYPE == MMU_DATA_LOAD) {
-        HOOK_FOREACH(uc, hook, UC_HOOK_MEM_READ) {
-            if (!HOOK_BOUND_CHECK(hook, addr))
-                continue;
-            ((uc_cb_hookmem_t)hook->callback)(env->uc, UC_MEM_READ, addr, DATA_SIZE, 0, hook->user_data);
+        if (!uc->size_recur_mem) { // disabling read callback if in recursive call
+            HOOK_FOREACH(uc, hook, UC_HOOK_MEM_READ) {
+              if (hook->to_delete)
+                  continue;
+              if (!HOOK_BOUND_CHECK(hook, addr))
+                    continue;
+                ((uc_cb_hookmem_t)hook->callback)(env->uc, UC_MEM_READ, addr, DATA_SIZE, 0, hook->user_data);
+            }
         }
     }
 
@@ -499,9 +528,11 @@ WORD_TYPE helper_be_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
     if (READ_ACCESS_TYPE == MMU_DATA_LOAD && mr != NULL && !(mr->perms & UC_PROT_READ)) {  //non-readable
         handled = false;
         HOOK_FOREACH(uc, hook, UC_HOOK_MEM_READ_PROT) {
+            if (hook->to_delete)
+                continue;
             if (!HOOK_BOUND_CHECK(hook, addr))
                 continue;
-            if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_READ_PROT, addr, DATA_SIZE, 0, hook->user_data)))
+            if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_READ_PROT, addr, DATA_SIZE - uc->size_recur_mem, 0, hook->user_data)))
                 break;
         }
 
@@ -511,7 +542,7 @@ WORD_TYPE helper_be_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
             env->invalid_addr = addr;
             env->invalid_error = UC_ERR_READ_PROT;
             // printf("***** Invalid memory read (non-readable) at " TARGET_FMT_lx "\n", addr);
-            cpu_exit(uc->current_cpu);
+            cpu_exit(uc->cpu);
             return 0;
         }
     }
@@ -535,7 +566,7 @@ WORD_TYPE helper_be_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
 #else
             env->invalid_error = UC_ERR_READ_UNALIGNED;
 #endif
-            cpu_exit(uc->current_cpu);
+            cpu_exit(uc->cpu);
             return 0;
         }
 #endif
@@ -558,7 +589,7 @@ WORD_TYPE helper_be_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
             env->invalid_addr = addr;
             env->invalid_error = UC_ERR_READ_UNMAPPED;
             // printf("Invalid memory read at " TARGET_FMT_lx "\n", addr);
-            cpu_exit(env->uc->current_cpu);
+            cpu_exit(env->uc->cpu);
             return 0;
         }
 
@@ -586,15 +617,18 @@ WORD_TYPE helper_be_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
 #else
         env->invalid_error = UC_ERR_READ_UNALIGNED;
 #endif
-        cpu_exit(uc->current_cpu);
+        cpu_exit(uc->cpu);
         return 0;
 #endif
         addr1 = addr & ~(DATA_SIZE - 1);
         addr2 = addr1 + DATA_SIZE;
         /* Note the adjustment at the beginning of the function.
            Undo that for the recursion.  */
+        uc->size_recur_mem = DATA_SIZE - (addr - addr1); // size already treated by callback
         res1 = helper_be_ld_name(env, addr1, mmu_idx, retaddr + GETPC_ADJ);
+        uc->size_recur_mem = (addr2 - addr);
         res2 = helper_be_ld_name(env, addr2, mmu_idx, retaddr + GETPC_ADJ);
+        uc->size_recur_mem = 0;
         shift = (addr & (DATA_SIZE - 1)) * 8;
 
         /* Big-endian combine.  */
@@ -613,7 +647,7 @@ WORD_TYPE helper_be_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
 #else
         env->invalid_error = UC_ERR_READ_UNALIGNED;
 #endif
-        cpu_exit(uc->current_cpu);
+        cpu_exit(uc->cpu);
         return 0;
     }
 #endif
@@ -624,10 +658,14 @@ WORD_TYPE helper_be_ld_name(CPUArchState *env, target_ulong addr, int mmu_idx,
 _out:
     // Unicorn: callback on successful read
     if (READ_ACCESS_TYPE == MMU_DATA_LOAD) {
-        HOOK_FOREACH(uc, hook, UC_HOOK_MEM_READ_AFTER) {
-            if (!HOOK_BOUND_CHECK(hook, addr))
-                continue;
-            ((uc_cb_hookmem_t)hook->callback)(env->uc, UC_MEM_READ_AFTER, addr, DATA_SIZE, res, hook->user_data);
+        if (!uc->size_recur_mem) { // disabling read callback if in recursive call
+            HOOK_FOREACH(uc, hook, UC_HOOK_MEM_READ_AFTER) {
+              if (hook->to_delete)
+                  continue;
+              if (!HOOK_BOUND_CHECK(hook, addr))
+                    continue;
+                ((uc_cb_hookmem_t)hook->callback)(env->uc, UC_MEM_READ_AFTER, addr, DATA_SIZE, res, hook->user_data);
+            }
         }
     }
 
@@ -695,17 +733,23 @@ void helper_le_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
     struct uc_struct *uc = env->uc;
     MemoryRegion *mr = memory_mapping(uc, addr);
 
-    // Unicorn: callback on memory write
-    HOOK_FOREACH(uc, hook, UC_HOOK_MEM_WRITE) {
-            if (!HOOK_BOUND_CHECK(hook, addr))
-                continue;
-        ((uc_cb_hookmem_t)hook->callback)(uc, UC_MEM_WRITE, addr, DATA_SIZE, val, hook->user_data);
+    if (!uc->size_recur_mem) { // disabling write callback if in recursive call
+        // Unicorn: callback on memory write
+        HOOK_FOREACH(uc, hook, UC_HOOK_MEM_WRITE) {
+          if (hook->to_delete)
+              continue;
+          if (!HOOK_BOUND_CHECK(hook, addr))
+              continue;
+            ((uc_cb_hookmem_t)hook->callback)(uc, UC_MEM_WRITE, addr, DATA_SIZE, val, hook->user_data);
+        }
     }
 
     // Unicorn: callback on invalid memory
     if (mr == NULL) {
         handled = false;
         HOOK_FOREACH(uc, hook, UC_HOOK_MEM_WRITE_UNMAPPED) {
+            if (hook->to_delete)
+                continue;
             if (!HOOK_BOUND_CHECK(hook, addr))
                 continue;
             if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_WRITE_UNMAPPED, addr, DATA_SIZE, val, hook->user_data)))
@@ -717,7 +761,7 @@ void helper_le_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
             env->invalid_addr = addr;
             env->invalid_error = UC_ERR_WRITE_UNMAPPED;
             // printf("***** Invalid memory write at " TARGET_FMT_lx "\n", addr);
-            cpu_exit(uc->current_cpu);
+            cpu_exit(uc->cpu);
             return;
         } else {
             env->invalid_error = UC_ERR_OK;
@@ -729,6 +773,8 @@ void helper_le_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
     if (mr != NULL && !(mr->perms & UC_PROT_WRITE)) {  //non-writable
         handled = false;
         HOOK_FOREACH(uc, hook, UC_HOOK_MEM_WRITE_PROT) {
+            if (hook->to_delete)
+                continue;
             if (!HOOK_BOUND_CHECK(hook, addr))
                 continue;
             if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_WRITE_PROT, addr, DATA_SIZE, val, hook->user_data)))
@@ -741,7 +787,7 @@ void helper_le_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
             env->invalid_addr = addr;
             env->invalid_error = UC_ERR_WRITE_PROT;
             // printf("***** Invalid memory write (ro) at " TARGET_FMT_lx "\n", addr);
-            cpu_exit(uc->current_cpu);
+            cpu_exit(uc->cpu);
             return;
         }
     }
@@ -758,7 +804,7 @@ void helper_le_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
             //                     mmu_idx, retaddr);
             env->invalid_addr = addr;
             env->invalid_error = UC_ERR_WRITE_UNALIGNED;
-            cpu_exit(uc->current_cpu);
+            cpu_exit(uc->cpu);
             return;
         }
 #endif
@@ -779,7 +825,7 @@ void helper_le_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
             env->invalid_addr = addr;
             env->invalid_error = UC_ERR_WRITE_UNMAPPED;
             // printf("***** Invalid memory write at " TARGET_FMT_lx "\n", addr);
-            cpu_exit(env->uc->current_cpu);
+            cpu_exit(env->uc->cpu);
             return;
         }
 
@@ -801,7 +847,7 @@ void helper_le_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
                              mmu_idx, retaddr);
         env->invalid_addr = addr;
         env->invalid_error = UC_ERR_WRITE_UNALIGNED;
-        cpu_exit(uc->current_cpu);
+        cpu_exit(uc->cpu);
         return;
 #endif
         /* XXX: not efficient, but simple */
@@ -810,6 +856,8 @@ void helper_le_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
         for (i = DATA_SIZE - 1; i >= 0; i--) {
             /* Little-endian extract.  */
             uint8_t val8 = (uint8_t)(val >> (i * 8));
+            // size already treated, this is used only for diabling the write cb
+            uc->size_recur_mem = DATA_SIZE - i ;
             /* Note the adjustment at the beginning of the function.
                Undo that for the recursion.  */
             glue(helper_ret_stb, MMUSUFFIX)(env, addr + i, val8,
@@ -817,6 +865,7 @@ void helper_le_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
             if (env->invalid_error != UC_ERR_OK)
                 break;
         }
+        uc->size_recur_mem = 0;
         return;
     }
 
@@ -827,7 +876,7 @@ void helper_le_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
                              mmu_idx, retaddr);
         env->invalid_addr = addr;
         env->invalid_error = UC_ERR_WRITE_UNALIGNED;
-        cpu_exit(uc->current_cpu);
+        cpu_exit(uc->cpu);
         return;
     }
 #endif
@@ -854,17 +903,23 @@ void helper_be_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
     struct uc_struct *uc = env->uc;
     MemoryRegion *mr = memory_mapping(uc, addr);
 
-    // Unicorn: callback on memory write
-    HOOK_FOREACH(uc, hook, UC_HOOK_MEM_WRITE) {
-        if (!HOOK_BOUND_CHECK(hook, addr))
-            continue;
-        ((uc_cb_hookmem_t)hook->callback)(uc, UC_MEM_WRITE, addr, DATA_SIZE, val, hook->user_data);
+    if (!uc->size_recur_mem) { // disabling write callback if in recursive call
+        // Unicorn: callback on memory write
+        HOOK_FOREACH(uc, hook, UC_HOOK_MEM_WRITE) {
+          if (hook->to_delete)
+              continue;
+          if (!HOOK_BOUND_CHECK(hook, addr))
+                continue;
+            ((uc_cb_hookmem_t)hook->callback)(uc, UC_MEM_WRITE, addr, DATA_SIZE, val, hook->user_data);
+        }
     }
 
     // Unicorn: callback on invalid memory
     if (mr == NULL) {
         handled = false;
         HOOK_FOREACH(uc, hook, UC_HOOK_MEM_WRITE_UNMAPPED) {
+            if (hook->to_delete)
+                continue;
             if (!HOOK_BOUND_CHECK(hook, addr))
                 continue;
             if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_WRITE_UNMAPPED, addr, DATA_SIZE, val, hook->user_data)))
@@ -876,7 +931,7 @@ void helper_be_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
             env->invalid_addr = addr;
             env->invalid_error = UC_ERR_WRITE_UNMAPPED;
             // printf("***** Invalid memory write at " TARGET_FMT_lx "\n", addr);
-            cpu_exit(uc->current_cpu);
+            cpu_exit(uc->cpu);
             return;
         } else {
             env->invalid_error = UC_ERR_OK;
@@ -888,6 +943,8 @@ void helper_be_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
     if (mr != NULL && !(mr->perms & UC_PROT_WRITE)) {  //non-writable
         handled = false;
         HOOK_FOREACH(uc, hook, UC_HOOK_MEM_WRITE_PROT) {
+            if (hook->to_delete)
+                continue;
             if (!HOOK_BOUND_CHECK(hook, addr))
                 continue;
             if ((handled = ((uc_cb_eventmem_t)hook->callback)(uc, UC_MEM_WRITE_PROT, addr, DATA_SIZE, val, hook->user_data)))
@@ -900,7 +957,7 @@ void helper_be_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
             env->invalid_addr = addr;
             env->invalid_error = UC_ERR_WRITE_PROT;
             // printf("***** Invalid memory write (ro) at " TARGET_FMT_lx "\n", addr);
-            cpu_exit(uc->current_cpu);
+            cpu_exit(uc->cpu);
             return;
         }
     }
@@ -917,7 +974,7 @@ void helper_be_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
                                  mmu_idx, retaddr);
             env->invalid_addr = addr;
             env->invalid_error = UC_ERR_WRITE_UNALIGNED;
-            cpu_exit(uc->current_cpu);
+            cpu_exit(uc->cpu);
             return;
         }
 #endif
@@ -938,7 +995,7 @@ void helper_be_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
             env->invalid_addr = addr;
             env->invalid_error = UC_ERR_WRITE_UNMAPPED;
             // printf("***** Invalid memory write at " TARGET_FMT_lx "\n", addr);
-            cpu_exit(env->uc->current_cpu);
+            cpu_exit(env->uc->cpu);
             return;
         }
 
@@ -960,7 +1017,7 @@ void helper_be_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
                              mmu_idx, retaddr);
         env->invalid_addr = addr;
         env->invalid_error = UC_ERR_WRITE_UNALIGNED;
-        cpu_exit(uc->current_cpu);
+        cpu_exit(uc->cpu);
         return;
 #endif
         /* XXX: not efficient, but simple */
@@ -969,6 +1026,8 @@ void helper_be_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
         for (i = DATA_SIZE - 1; i >= 0; i--) {
             /* Big-endian extract.  */
             uint8_t val8 = (uint8_t)(val >> (((DATA_SIZE - 1) * 8) - (i * 8)));
+            // size already treated, this is used only for diabling the write cb
+            uc->size_recur_mem = DATA_SIZE - i ;
             /* Note the adjustment at the beginning of the function.
                Undo that for the recursion.  */
             glue(helper_ret_stb, MMUSUFFIX)(env, addr + i, val8,
@@ -976,6 +1035,7 @@ void helper_be_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
             if (env->invalid_error != UC_ERR_OK)
                 break;
         }
+        uc->size_recur_mem = 0;
         return;
     }
 
@@ -986,7 +1046,7 @@ void helper_be_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
                              mmu_idx, retaddr);
         env->invalid_addr = addr;
         env->invalid_error = UC_ERR_WRITE_UNALIGNED;
-        cpu_exit(uc->current_cpu);
+        cpu_exit(uc->cpu);
         return;
     }
 #endif

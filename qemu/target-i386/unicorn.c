@@ -1,8 +1,7 @@
 /* Unicorn Emulator Engine */
 /* By Nguyen Anh Quynh <aquynh@gmail.com>, 2015 */
+/* Modified for Unicorn Engine by Chen Huitao<chenhuitao@hfmrit.com>, 2020 */
 
-#include "hw/boards.h"
-#include "hw/i386/pc.h"
 #include "sysemu/cpus.h"
 #include "unicorn.h"
 #include "cpu.h"
@@ -10,6 +9,8 @@
 #include "unicorn_common.h"
 #include <unicorn/x86.h>  /* needed for uc_x86_mmr */
 #include "uc_priv.h"
+
+#define FPST(n)  (X86_CPU(uc, mycpu)->env.fpregs[(X86_CPU(uc, mycpu)->env.fpstt + (n)) & 7].d)
 
 #define X86_NON_CS_FLAGS (DESC_P_MASK | DESC_S_MASK | DESC_W_MASK | DESC_A_MASK)
 static void load_seg_16_helper(CPUX86State *env, int seg, uint32_t selector)
@@ -25,12 +26,10 @@ const int X86_REGS_STORAGE_SIZE = offsetof(CPUX86State, tlb_table);
 
 static void x86_set_pc(struct uc_struct *uc, uint64_t address)
 {
-    ((CPUX86State *)uc->current_cpu->env_ptr)->eip = address;
+    ((CPUX86State *)uc->cpu->env_ptr)->eip = address;
 }
 
-void x86_release(void *ctx);
-
-void x86_release(void *ctx)
+static void x86_release(void *ctx)
 {
     int i;
     TCGContext *s = (TCGContext *) ctx;
@@ -78,7 +77,6 @@ void x86_reg_reset(struct uc_struct *uc)
 
     env->eip = 0;
     env->eflags = 0;
-    env->eflags0 = 0;
     env->cc_op = CC_OP_EFLAGS;
 
     env->fpstt = 0; /* top of stack index */
@@ -160,6 +158,10 @@ void x86_reg_reset(struct uc_struct *uc)
             env->hflags &= ~(HF_ADDSEG_MASK);
             env->efer |= MSR_EFER_LMA | MSR_EFER_LME; // extended mode activated
             cpu_x86_update_cr0(env, CR0_PE_MASK); // protected mode
+            /* If we are operating in 64bit mode then add the Long Mode flag
+             * to the CPUID feature flag
+             */
+            env->features[FEAT_8000_0001_EDX] |= CPUID_EXT2_LM;
             break;
     }
 }
@@ -287,6 +289,19 @@ int x86_reg_read(struct uc_struct *uc, unsigned int *regs, void **vals, int coun
                     dst[1] = reg->_d[1];
                     continue;
                 }
+            case UC_X86_REG_ST0:
+            case UC_X86_REG_ST1:
+            case UC_X86_REG_ST2:
+            case UC_X86_REG_ST3:
+            case UC_X86_REG_ST4:
+            case UC_X86_REG_ST5:
+            case UC_X86_REG_ST6:
+            case UC_X86_REG_ST7:
+                {
+                    // value must be big enough to keep 80 bits (10 bytes)
+                    memcpy(value, &FPST(regid - UC_X86_REG_ST0), 10);
+                    continue;
+                }
             case UC_X86_REG_YMM0:
             case UC_X86_REG_YMM1:
             case UC_X86_REG_YMM2:
@@ -335,6 +350,9 @@ int x86_reg_read(struct uc_struct *uc, unsigned int *regs, void **vals, int coun
                         continue;
                     case UC_X86_REG_GS:
                         *(int16_t *)value = X86_CPU(uc, mycpu)->env.segs[R_GS].selector;
+                        continue;
+                    case UC_X86_REG_FS_BASE:
+                        *(uint32_t *)value = (uint32_t)X86_CPU(uc, mycpu)->env.segs[R_FS].base;
                         continue;
                 }
                 // fall-thru
@@ -483,6 +501,9 @@ int x86_reg_read(struct uc_struct *uc, unsigned int *regs, void **vals, int coun
                         break;
                     case UC_X86_REG_MXCSR:
                         *(uint32_t *)value = X86_CPU(uc, mycpu)->env.mxcsr;
+                        break;
+                    case UC_X86_REG_FS_BASE:
+                        *(uint32_t *)value = (uint32_t)X86_CPU(uc, mycpu)->env.segs[R_FS].base;
                         break;
                 }
                 break;
@@ -784,6 +805,12 @@ int x86_reg_read(struct uc_struct *uc, unsigned int *regs, void **vals, int coun
                             dst[1] = reg->_d[1];
                             break;
                         }
+                    case UC_X86_REG_FS_BASE:
+                        *(uint64_t *)value = (uint64_t)X86_CPU(uc, mycpu)->env.segs[R_FS].base;
+                        break;
+                    case UC_X86_REG_GS_BASE:
+                        *(uint64_t *)value = (uint64_t)X86_CPU(uc, mycpu)->env.segs[R_GS].base;
+                        break;
                 }
                 break;
 #endif
@@ -854,6 +881,19 @@ int x86_reg_write(struct uc_struct *uc, unsigned int *regs, void *const *vals, i
                     XMMReg *reg = &X86_CPU(uc, mycpu)->env.xmm_regs[regid - UC_X86_REG_XMM0];
                     reg->_d[0] = src[0];
                     reg->_d[1] = src[1];
+                    continue;
+                }
+            case UC_X86_REG_ST0:
+            case UC_X86_REG_ST1:
+            case UC_X86_REG_ST2:
+            case UC_X86_REG_ST3:
+            case UC_X86_REG_ST4:
+            case UC_X86_REG_ST5:
+            case UC_X86_REG_ST6:
+            case UC_X86_REG_ST7:
+                {
+                    // value must be big enough to keep 80 bits (10 bytes)
+                    memcpy(&FPST(regid - UC_X86_REG_ST0), value, 10);
                     continue;
                 }
             case UC_X86_REG_YMM0:
@@ -931,7 +971,6 @@ int x86_reg_write(struct uc_struct *uc, unsigned int *regs, void *const *vals, i
                         break;
                     case UC_X86_REG_EFLAGS:
                         cpu_load_eflags(&X86_CPU(uc, mycpu)->env, *(uint32_t *)value, -1);
-                        X86_CPU(uc, mycpu)->env.eflags0 = *(uint32_t *)value;
                         break;
                     case UC_X86_REG_EAX:
                         X86_CPU(uc, mycpu)->env.regs[R_EAX] = *(uint32_t *)value;
@@ -1085,6 +1124,15 @@ int x86_reg_write(struct uc_struct *uc, unsigned int *regs, void *const *vals, i
                     case UC_X86_REG_MXCSR:
                         cpu_set_mxcsr(&X86_CPU(uc, mycpu)->env, *(uint32_t *)value);
                         break;
+                        /*
+                    // Don't think base registers are a "thing" on x86
+                    case UC_X86_REG_FS_BASE: 
+                        X86_CPU(uc, mycpu)->env.segs[R_FS].base = *(uint32_t *)value;
+                        continue;
+                    case UC_X86_REG_GS_BASE:
+                        X86_CPU(uc, mycpu)->env.segs[R_GS].base = *(uint32_t *)value;
+                        continue;
+                        */
                 }
                 break;
 
@@ -1112,7 +1160,6 @@ int x86_reg_write(struct uc_struct *uc, unsigned int *regs, void *const *vals, i
                         break;
                     case UC_X86_REG_EFLAGS:
                         cpu_load_eflags(&X86_CPU(uc, mycpu)->env, *(uint64_t *)value, -1);
-                        X86_CPU(uc, mycpu)->env.eflags0 = *(uint64_t *)value;
                         break;
                     case UC_X86_REG_RAX:
                         X86_CPU(uc, mycpu)->env.regs[R_EAX] = *(uint64_t *)value;
@@ -1403,6 +1450,12 @@ int x86_reg_write(struct uc_struct *uc, unsigned int *regs, void *const *vals, i
                             reg->_d[1] = src[1];
                             break;
                         }
+                    case UC_X86_REG_FS_BASE:
+                        X86_CPU(uc, mycpu)->env.segs[R_FS].base = *(uint64_t *)value;
+                        continue;
+                    case UC_X86_REG_GS_BASE:
+                        X86_CPU(uc, mycpu)->env.segs[R_GS].base = *(uint64_t *)value;
+                        continue;
                 }
                 break;
 #endif
@@ -1410,12 +1463,6 @@ int x86_reg_write(struct uc_struct *uc, unsigned int *regs, void *const *vals, i
     }
 
     return 0;
-}
-
-DEFAULT_VISIBILITY
-int x86_uc_machine_init(struct uc_struct *uc)
-{
-    return machine_initialize(uc);
 }
 
 static bool x86_stop_interrupt(int intno)
@@ -1427,8 +1474,6 @@ static bool x86_stop_interrupt(int intno)
             return true;
     }
 }
-
-void pc_machine_init(struct uc_struct *uc);
 
 static bool x86_insn_hook_validate(uint32_t insn_enum)
 {
@@ -1442,15 +1487,22 @@ static bool x86_insn_hook_validate(uint32_t insn_enum)
     return true;
 }
 
+static int x86_cpus_init(struct uc_struct *uc, const char *cpu_model)
+{
+
+    X86CPU *cpu;
+
+    cpu = cpu_x86_init(uc, cpu_model);
+    if (cpu == NULL) {
+        return -1;
+    }
+
+    return 0;
+}
+
 DEFAULT_VISIBILITY
 void x86_uc_init(struct uc_struct* uc)
 {
-    apic_register_types(uc);
-    apic_common_register_types(uc);
-    register_accel_types(uc);
-    pc_machine_register_types(uc);
-    x86_cpu_register_types(uc);
-    pc_machine_init(uc); // pc_piix
     uc->reg_read = x86_reg_read;
     uc->reg_write = x86_reg_write;
     uc->reg_reset = x86_reg_reset;
@@ -1458,6 +1510,7 @@ void x86_uc_init(struct uc_struct* uc)
     uc->set_pc = x86_set_pc;
     uc->stop_interrupt = x86_stop_interrupt;
     uc->insn_hook_validate = x86_insn_hook_validate;
+    uc->cpus_init = x86_cpus_init;
     uc_common_init(uc);
 }
 

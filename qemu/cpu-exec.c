@@ -39,20 +39,16 @@ void cpu_loop_exit(CPUState *cpu)
 /* exit the current TB from a signal handler. The host registers are
    restored in a state compatible with the CPU emulator
    */
-#if defined(CONFIG_SOFTMMU)
-
 void cpu_resume_from_signal(CPUState *cpu, void *puc)
 {
-#endif
     /* XXX: restore cpu registers saved in host registers */
-
     cpu->exception_index = -1;
     siglongjmp(cpu->jmp_env, 1);
 }
 
 /* main execution loop */
 
-int cpu_exec(struct uc_struct *uc, CPUArchState *env)   // qq
+int cpu_exec(struct uc_struct *uc, CPUArchState *env)
 {
     CPUState *cpu = ENV_GET_CPU(env);
     TCGContext *tcg_ctx = env->uc->tcg_ctx;
@@ -66,7 +62,6 @@ int cpu_exec(struct uc_struct *uc, CPUArchState *env)   // qq
     uintptr_t next_tb;
     struct hook *hook;
 
-
     if (cpu->halted) {
         if (!cpu_has_work(cpu)) {
             return EXCP_HALTED;
@@ -75,7 +70,7 @@ int cpu_exec(struct uc_struct *uc, CPUArchState *env)   // qq
         cpu->halted = 0;
     }
 
-    uc->current_cpu = cpu;
+    uc->cpu = cpu;
 
     /* As long as current_cpu is null, up to the assignment just above,
      * requests by other threads to exit the execution loop are expected to
@@ -102,7 +97,7 @@ int cpu_exec(struct uc_struct *uc, CPUArchState *env)   // qq
 
             /* if an exception is pending, we execute it here */
             if (cpu->exception_index >= 0) {
-                //printf(">>> GOT INTERRUPT. exception idx = %x\n", cpu->exception_index);	// qq
+                //printf(">>> GOT INTERRUPT. exception idx = %x\n", cpu->exception_index);
                 if (cpu->exception_index >= EXCP_INTERRUPT) {
                     /* exit request from the cpu execution loop */
                     ret = cpu->exception_index;
@@ -122,10 +117,21 @@ int cpu_exec(struct uc_struct *uc, CPUArchState *env)   // qq
                     ret = cpu->exception_index;
                     break;
 #else
+#if defined(TARGET_X86_64)
+                    if (env->exception_is_int) {
+                        // point EIP to the next instruction after INT
+                        env->eip = env->exception_next_eip;
+                    }
+#endif
+#if defined(TARGET_MIPS) || defined(TARGET_MIPS64)
+                    env->active_tc.PC = uc->next_pc;
+#endif
                     if (uc->stop_interrupt && uc->stop_interrupt(cpu->exception_index)) {
                         // Unicorn: call registered invalid instruction callbacks
                         HOOK_FOREACH_VAR_DECLARE;
                         HOOK_FOREACH(uc, hook, UC_HOOK_INSN_INVALID) {
+                            if (hook->to_delete)
+                                continue;
                             catched = ((uc_cb_hookinsn_invalid_t)hook->callback)(uc, hook->user_data);
                             if (catched)
                                 break;
@@ -136,6 +142,8 @@ int cpu_exec(struct uc_struct *uc, CPUArchState *env)   // qq
                         // Unicorn: call registered interrupt callbacks
                         HOOK_FOREACH_VAR_DECLARE;
                         HOOK_FOREACH(uc, hook, UC_HOOK_INTR) {
+                            if (hook->to_delete)
+                                continue;
                             ((uc_cb_hookintr_t)hook->callback)(uc, cpu->exception_index, hook->user_data);
                             catched = true;
                         }
@@ -151,15 +159,6 @@ int cpu_exec(struct uc_struct *uc, CPUArchState *env)   // qq
                     }
 
                     cpu->exception_index = -1;
-#if defined(TARGET_X86_64)
-                    if (env->exception_is_int) {
-                        // point EIP to the next instruction after INT
-                        env->eip = env->exception_next_eip;
-                    }
-#endif
-#if defined(TARGET_MIPS) || defined(TARGET_MIPS64)
-                    env->active_tc.PC = uc->next_pc;
-#endif
 #endif
                 }
             }
@@ -222,7 +221,7 @@ int cpu_exec(struct uc_struct *uc, CPUArchState *env)   // qq
                     cpu_loop_exit(cpu);
                 }
 
-                tb = tb_find_fast(env);	// qq
+                tb = tb_find_fast(env);
                 if (!tb) {   // invalid TB due to invalid code?
                     uc->invalid_error = UC_ERR_FETCH_UNMAPPED;
                     ret = EXCP_HLT;
@@ -256,7 +255,7 @@ int cpu_exec(struct uc_struct *uc, CPUArchState *env)   // qq
                 if (likely(!cpu->exit_request)) {
                     tc_ptr = tb->tc_ptr;
                     /* execute the generated code */
-                    next_tb = cpu_tb_exec(cpu, tc_ptr);	// qq
+                    next_tb = cpu_tb_exec(cpu, tc_ptr);
 
                     switch (next_tb & TB_EXIT_MASK) {
                         case TB_EXIT_REQUESTED:
@@ -282,7 +281,7 @@ int cpu_exec(struct uc_struct *uc, CPUArchState *env)   // qq
         } else {
             /* Reload env after longjmp - the compiler may have smashed all
              * local variables as longjmp is marked 'noreturn'. */
-            cpu = uc->current_cpu;
+            cpu = uc->cpu;
             env = cpu->env_ptr;
             cc = CPU_GET_CLASS(uc, cpu);
 #ifdef TARGET_I386
@@ -291,6 +290,9 @@ int cpu_exec(struct uc_struct *uc, CPUArchState *env)   // qq
         }
     } /* for(;;) */
 
+    // Unicorn: Clear any TCG exit flag that might have been left set by exit requests
+    uc->cpu->tcg_exit_req = 0;
+
     cc->cpu_exec_exit(cpu);
 
     // Unicorn: flush JIT cache to because emulation might stop in
@@ -298,8 +300,9 @@ int cpu_exec(struct uc_struct *uc, CPUArchState *env)   // qq
     // TODO: optimize this for better performance
     tb_flush(env);
 
-    /* fail safe : never use current_cpu outside cpu_exec() */
-    uc->current_cpu = NULL;
+    /* fail safe : never use cpu outside cpu_exec() */
+    // uc->cpu = NULL;
+
     return ret;
 }
 
@@ -350,7 +353,7 @@ static tcg_target_ulong cpu_tb_exec(CPUState *cpu, uint8_t *tb_ptr)
 }
 
 static TranslationBlock *tb_find_slow(CPUArchState *env, target_ulong pc,
-        target_ulong cs_base, uint64_t flags)   // qq
+        target_ulong cs_base, uint64_t flags)
 {
     CPUState *cpu = ENV_GET_CPU(env);
     TCGContext *tcg_ctx = env->uc->tcg_ctx;
@@ -362,7 +365,7 @@ static TranslationBlock *tb_find_slow(CPUArchState *env, target_ulong pc,
     tcg_ctx->tb_ctx.tb_invalidated_flag = 0;
 
     /* find translated block using physical mappings */
-    phys_pc = get_page_addr_code(env, pc);  // qq
+    phys_pc = get_page_addr_code(env, pc);
     if (phys_pc == -1) { // invalid code?
         return NULL;
     }
@@ -394,7 +397,10 @@ static TranslationBlock *tb_find_slow(CPUArchState *env, target_ulong pc,
     }
 not_found:
     /* if no translated code available, then translate it now */
-    tb = tb_gen_code(cpu, pc, cs_base, (int)flags, 0);   // qq
+    tb = tb_gen_code(cpu, pc, cs_base, (int)flags, 0);
+    if (tb == NULL) {
+        return NULL;
+    }
 
 found:
     /* Move the last found TB to the head of the list */
@@ -408,7 +414,7 @@ found:
     return tb;
 }
 
-static TranslationBlock *tb_find_fast(CPUArchState *env)    // qq
+static TranslationBlock *tb_find_fast(CPUArchState *env)
 {
     CPUState *cpu = ENV_GET_CPU(env);
     TranslationBlock *tb;
@@ -422,7 +428,7 @@ static TranslationBlock *tb_find_fast(CPUArchState *env)    // qq
     tb = cpu->tb_jmp_cache[tb_jmp_cache_hash_func(pc)];
     if (unlikely(!tb || tb->pc != pc || tb->cs_base != cs_base ||
                 tb->flags != flags)) {
-        tb = tb_find_slow(env, pc, cs_base, flags); // qq
+        tb = tb_find_slow(env, pc, cs_base, flags);
     }
     return tb;
 }

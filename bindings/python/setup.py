@@ -60,6 +60,7 @@ else:
 
 if SYSTEM == 'darwin':
     LIBRARY_FILE = "libunicorn.dylib"
+    MAC_LIBRARY_FILE = "libunicorn*.dylib"
     STATIC_LIBRARY_FILE = None
 elif SYSTEM in ('win32', 'cygwin'):
     LIBRARY_FILE = "unicorn.dll"
@@ -171,7 +172,14 @@ def build_libraries():
 
         subprocess.call(cmd, env=new_env)
 
-        shutil.copy(LIBRARY_FILE, LIBS_DIR)
+        if SYSTEM == 'darwin':
+            for file in glob.glob(MAC_LIBRARY_FILE):
+                try:
+                    shutil.copy(file, LIBS_DIR, follow_symlinks=False)
+                except:
+                    shutil.copy(file, LIBS_DIR)
+        else:
+            shutil.copy(LIBRARY_FILE, LIBS_DIR)
         try:
             # static library may fail to build on windows if user doesn't have visual studio installed. this is fine.
             if STATIC_LIBRARY_FILE is not None:
@@ -246,6 +254,24 @@ except ImportError:
 def join_all(src, files):
     return tuple(os.path.join(src, f) for f in files)
 
+long_desc = '''
+Unicorn is a lightweight, multi-platform, multi-architecture CPU emulator framework
+based on [QEMU](http://qemu.org).
+
+Unicorn offers some unparalleled features:
+
+- Multi-architecture: ARM, ARM64 (ARMv8), M68K, MIPS, PowerPC, SPARC and X86 (16, 32, 64-bit)
+- Clean/simple/lightweight/intuitive architecture-neutral API
+- Implemented in pure C language, with bindings for Crystal, Clojure, Visual Basic, Perl, Rust, Ruby, Python, Java, .NET, Go, Delphi/Free Pascal, Haskell, Pharo, and Lua.
+- Native support for Windows & *nix (with Mac OSX, Linux, *BSD & Solaris confirmed)
+- High performance via Just-In-Time compilation
+- Support for fine-grained instrumentation at various levels
+- Thread-safety by design
+- Distributed under free software license GPLv2
+
+Further information is available at http://www.unicorn-engine.org
+'''
+
 setup(
     provides=['unicorn'],
     packages=['unicorn'],
@@ -254,6 +280,8 @@ setup(
     author='Nguyen Anh Quynh',
     author_email='aquynh@gmail.com',
     description='Unicorn CPU emulator engine',
+    long_description=long_desc,
+    long_description_content_type="text/markdown",
     url='http://www.unicorn-engine.org',
     classifiers=[
         'License :: OSI Approved :: BSD License',

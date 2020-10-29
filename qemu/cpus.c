@@ -71,6 +71,8 @@ int resume_all_vcpus(struct uc_struct *uc)
             return -1;
     }
 
+    cpu->exit_request = 0;
+
     //qemu_clock_enable(QEMU_CLOCK_VIRTUAL, true);
     cpu_resume(cpu);
     qemu_tcg_cpu_loop(uc);
@@ -186,26 +188,4 @@ static void cpu_handle_guest_debug(CPUState *cpu)
 {
     cpu->stopped = true;
 }
-
-#if 0
-#ifndef _WIN32
-static void qemu_tcg_init_cpu_signals(void)
-{
-    sigset_t set;
-    struct sigaction sigact;
-
-    memset(&sigact, 0, sizeof(sigact));
-    sigact.sa_handler = cpu_signal;
-    sigaction(SIG_IPI, &sigact, NULL);
-
-    sigemptyset(&set);
-    sigaddset(&set, SIG_IPI);
-    pthread_sigmask(SIG_UNBLOCK, &set, NULL);
-}
-#else /* _WIN32 */
-static void qemu_tcg_init_cpu_signals(void)
-{
-}
-#endif /* _WIN32 */
-#endif
 

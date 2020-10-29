@@ -656,6 +656,8 @@
 #define gen_helper_double_saturate gen_helper_double_saturate_arm
 #define gen_helper_exception_internal gen_helper_exception_internal_arm
 #define gen_helper_exception_with_syndrome gen_helper_exception_with_syndrome_arm
+#define gen_helper_float64_to_float32 gen_helper_float64_to_float32_arm
+#define gen_helper_float32_to_float64 gen_helper_float32_to_float64_arm
 #define gen_helper_get_cp_reg gen_helper_get_cp_reg_arm
 #define gen_helper_get_cp_reg64 gen_helper_get_cp_reg64_arm
 #define gen_helper_get_r13_banked gen_helper_get_r13_banked_arm
@@ -1376,6 +1378,8 @@
 #define helper_exception_internal helper_exception_internal_arm
 #define helper_exception_return helper_exception_return_arm
 #define helper_exception_with_syndrome helper_exception_with_syndrome_arm
+#define helper_float32_to_float64 helper_float32_to_float64_arm
+#define helper_float64_to_float32 helper_float64_to_float32_arm
 #define helper_get_cp_reg helper_get_cp_reg_arm
 #define helper_get_cp_reg64 helper_get_cp_reg64_arm
 #define helper_get_r13_banked helper_get_r13_banked_arm
@@ -2114,7 +2118,6 @@
 #define object_child_foreach object_child_foreach_arm
 #define object_class_foreach object_class_foreach_arm
 #define object_class_foreach_tramp object_class_foreach_tramp_arm
-#define object_class_get_list object_class_get_list_arm
 #define object_class_get_list_tramp object_class_get_list_tramp_arm
 #define object_class_get_parent object_class_get_parent_arm
 #define object_deinit object_deinit_arm
@@ -3018,4 +3021,5 @@
 #define xscale_cpar_write xscale_cpar_write_arm
 #define xscale_cp_reginfo xscale_cp_reginfo_arm
 #define ARM_REGS_STORAGE_SIZE ARM_REGS_STORAGE_SIZE_arm
+#define arm_cpu_class_init arm_cpu_class_init_arm
 #endif

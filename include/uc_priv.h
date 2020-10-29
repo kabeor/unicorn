@@ -1,5 +1,7 @@
 /* Unicorn Emulator Engine */
 /* By Nguyen Anh Quynh <aquynh@gmail.com>, 2015 */
+/* Modified for Unicorn Engine by Chen Huitao<chenhuitao@hfmrit.com>, 2020 */
+
 
 #ifndef UC_PRIV_H
 #define UC_PRIV_H
@@ -34,14 +36,6 @@
 #define WRITE_BYTE_L(x, b) (x = (x & ~0xff) | (b & 0xff))
 
 
-typedef struct ModuleEntry {
-    void (*init)(void);
-    QTAILQ_ENTRY(ModuleEntry) node;
-    module_init_type type;
-} ModuleEntry;
-
-typedef QTAILQ_HEAD(, ModuleEntry) ModuleTypeList;
-
 typedef uc_err (*query_t)(struct uc_struct *uc, uc_query_type type, size_t *result);
 
 // return 0 on success, -1 on failure
@@ -73,6 +67,8 @@ typedef void (*uc_mem_unmap_t)(struct uc_struct*, MemoryRegion *mr);
 
 typedef void (*uc_readonly_mem_t)(MemoryRegion *mr, bool readonly);
 
+typedef int (*uc_cpus_init)(struct uc_struct *, const char *);
+
 // which interrupt should make emulation stop?
 typedef bool (*uc_args_int_t)(int intno);
 
@@ -86,6 +82,7 @@ struct hook {
     int type;            // UC_HOOK_*
     int insn;            // instruction for HOOK_INSN
     int refs;            // reference count to free hook stored in multiple lists
+    bool to_delete;      // set to true when the hook is deleted by the user. The destruction of the hook is delayed.
     uint64_t begin, end; // only trigger if PC or memory access is in this address (depends on hook type)
     void *callback;      // a uc_cb_* type
     void *user_data;
@@ -120,9 +117,7 @@ enum uc_hook_idx {
 #define HOOK_FOREACH(uc, hh, idx)                         \
     for (                                                 \
         cur = (uc)->hook[idx##_IDX].head;                 \
-        cur != NULL && ((hh) = (struct hook *)cur->data)  \
-            /* stop excuting callbacks on stop request */ \
-            && !uc->stop_request;                         \
+        cur != NULL && ((hh) = (struct hook *)cur->data); \
         cur = cur->next)
 
 // if statement to check hook bounds
@@ -145,6 +140,8 @@ static inline bool _hook_exists_bounded(struct list_item *cur, uint64_t addr)
 
 //relloc increment, KEEP THIS A POWER OF 2!
 #define MEM_BLOCK_INCR 32
+
+typedef struct TCGContext TCGContext;
 
 struct uc_struct {
     uc_arch arch;
@@ -171,8 +168,8 @@ struct uc_struct {
     uc_mem_unmap_t memory_unmap;
     uc_readonly_mem_t readonly_mem;
     uc_mem_redirect_t mem_redirect;
-    // TODO: remove current_cpu, as it's a flag for something else ("cpu running"?)
-    CPUState *cpu, *current_cpu;
+    uc_cpus_init cpus_init;
+    CPUState *cpu;
 
     uc_insn_hook_validate insn_hook_validate;
 
@@ -180,40 +177,22 @@ struct uc_struct {
     MemoryRegion io_mem_rom;    // qemu/exec.c
     MemoryRegion io_mem_notdirty;   // qemu/exec.c
     MemoryRegion io_mem_unassigned; // qemu/exec.c
-    MemoryRegion io_mem_watch;  // qemu/exec.c
     RAMList ram_list;   // qemu/exec.c
     BounceBuffer bounce;    // qemu/cpu-exec.c
     volatile sig_atomic_t exit_request; // qemu/cpu-exec.c
-    bool global_dirty_log;  // qemu/memory.c
     /* This is a multi-level map on the virtual address space.
        The bottom level has pointers to PageDesc.  */
     void **l1_map;  // qemu/translate-all.c
     size_t l1_map_size;
     /* code generation context */
-    void *tcg_ctx;  // for "TCGContext tcg_ctx" in qemu/translate-all.c
+    TCGContext *tcg_ctx;
     /* memory.c */
-    unsigned memory_region_transaction_depth;
-    bool memory_region_update_pending;
-    bool ioeventfd_update_pending;
     QTAILQ_HEAD(memory_listeners, MemoryListener) memory_listeners;
     QTAILQ_HEAD(, AddressSpace) address_spaces;
-    MachineState *machine_state;
-    // qom/object.c
-    GHashTable *type_table;
-    Type type_interface;
-    Object *root;
-    Object *owner;
-    bool enumerating_types;
-    // util/module.c
-    ModuleTypeList init_type_list[MODULE_INIT_MAX];
-    // hw/intc/apic_common.c
-    DeviceState *vapic;
-    int apic_no;
-    bool mmio_registered;
-    bool apic_report_tpr_access;
 
     // linked lists containing hooks per type
     struct list hook[UC_HOOK_MAX];
+    struct list hooks_to_del;
 
     // hook to count number of instructions for uc_emu_start()
     uc_hook count_hook;
@@ -221,13 +200,13 @@ struct uc_struct {
     size_t emu_counter; // current counter of uc_emu_start()
     size_t emu_count; // save counter of uc_emu_start()
 
-    uint64_t block_addr;    // save the last block address we hooked
+    int size_recur_mem; // size for mem access when in a recursive call
 
     bool init_tcg;      // already initialized local TCGv variables?
     bool stop_request;  // request to immediately stop emulation - for uc_emu_stop()
     bool quit_request;  // request to quit the current TB, but continue to emulate - for uc_mem_protect()
     bool emulation_done;  // emulation is done by uc_emu_start()
-    bool timed_out;     // emulation timed out, uc_emu_start() will result in EC_ERR_TIMEOUT
+    bool timed_out;     // emulation timed out, that can retrieve via uc_query(UC_QUERY_TIMEOUT)
     QemuThread timer;   // timer for emulation timeout
     uint64_t timeout;   // timeout for uc_emu_start()
 
@@ -251,9 +230,11 @@ struct uc_struct {
 };
 
 // Metadata stub for the variable-size cpu context used with uc_context_*()
+// We also save cpu->jmp_env, so emulation can be reentrant
 struct uc_context {
-   size_t size;
-   char data[0];
+   size_t context_size;	// size of the real internal context structure
+   unsigned int jmp_env_size; // size of cpu->jmp_env
+   char data[0]; // context + cpu->jmp_env
 };
 
 // check if this address is mapped in (via uc_mem_map())

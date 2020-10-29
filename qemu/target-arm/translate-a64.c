@@ -114,51 +114,6 @@ void a64_translate_init(struct uc_struct *uc)
 #endif
 }
 
-#if 0
-void aarch64_cpu_dump_state(CPUState *cs, FILE *f,
-                            fprintf_function cpu_fprintf, int flags)
-{
-    ARMCPU *cpu = ARM_CPU(cs);
-    CPUARMState *env = &cpu->env;
-    uint32_t psr = pstate_read(env);
-    int i;
-
-    cpu_fprintf(f, "PC=%016"PRIx64"  SP=%016"PRIx64"\n",
-            env->pc, env->xregs[31]);
-    for (i = 0; i < 31; i++) {
-        cpu_fprintf(f, "X%02d=%016"PRIx64, i, env->xregs[i]);
-        if ((i % 4) == 3) {
-            cpu_fprintf(f, "\n");
-        } else {
-            cpu_fprintf(f, " ");
-        }
-    }
-    cpu_fprintf(f, "PSTATE=%08x (flags %c%c%c%c)\n",
-                psr,
-                psr & PSTATE_N ? 'N' : '-',
-                psr & PSTATE_Z ? 'Z' : '-',
-                psr & PSTATE_C ? 'C' : '-',
-                psr & PSTATE_V ? 'V' : '-');
-    cpu_fprintf(f, "\n");
-
-    if (flags & CPU_DUMP_FPU) {
-        int numvfpregs = 32;
-        for (i = 0; i < numvfpregs; i += 2) {
-            uint64_t vlo = float64_val(env->vfp.regs[i * 2]);
-            uint64_t vhi = float64_val(env->vfp.regs[(i * 2) + 1]);
-            cpu_fprintf(f, "q%02d=%016" PRIx64 ":%016" PRIx64 " ",
-                        i, vhi, vlo);
-            vlo = float64_val(env->vfp.regs[(i + 1) * 2]);
-            vhi = float64_val(env->vfp.regs[((i + 1) * 2) + 1]);
-            cpu_fprintf(f, "q%02d=%016" PRIx64 ":%016" PRIx64 "\n",
-                        i + 1, vhi, vlo);
-        }
-        cpu_fprintf(f, "FPCR: %08x  FPSR: %08x\n",
-                    vfp_get_fpcr(env), vfp_get_fpsr(env));
-    }
-}
-#endif
-
 void gen_a64_set_pc_im(DisasContext *s, uint64_t val)
 {
     TCGContext *tcg_ctx = s->uc->tcg_ctx;
@@ -883,6 +838,7 @@ static void write_vec_element(DisasContext *s, TCGv_i64 tcg_src, int destidx,
 {
     TCGContext *tcg_ctx = s->uc->tcg_ctx;
     int vect_off = vec_reg_offset(s, destidx, element, memop & MO_SIZE);
+    CPUState *cs;
     switch (memop) {
     case MO_8:
         tcg_gen_st8_i64(tcg_ctx, tcg_src, tcg_ctx->cpu_env, vect_off);
@@ -897,7 +853,10 @@ static void write_vec_element(DisasContext *s, TCGv_i64 tcg_src, int destidx,
         tcg_gen_st_i64(tcg_ctx, tcg_src, tcg_ctx->cpu_env, vect_off);
         break;
     default:
-        g_assert_not_reached();
+        cs = CPU(s->uc->cpu);
+        cs->exception_index = EXCP_UDEF;
+        cpu_loop_exit(cs);
+        break;
     }
 }
 
@@ -5584,7 +5543,7 @@ static void handle_simd_dupe(DisasContext *s, int is_q, int rd, int rn,
 {
     TCGContext *tcg_ctx = s->uc->tcg_ctx;
     int size = ctz32(imm5);
-    int esize = 8 << size;
+    int esize = 8 << (size & 0x1f);
     int elements = (is_q ? 128 : 64) / esize;
     int index, i;
     TCGv_i64 tmp;
@@ -11120,8 +11079,6 @@ void gen_intermediate_code_internal_a64(ARMCPU *cpu,
     // Only hook this block if it is not broken from previous translation due to
     // full translation cache
     if (!env->uc->block_full && HOOK_EXISTS_BOUNDED(env->uc, UC_HOOK_BLOCK, pc_start)) {
-        // save block address to see if we need to patch block size later
-        env->uc->block_addr = pc_start;
         env->uc->size_arg = tcg_ctx->gen_opparam_buf - tcg_ctx->gen_opparam_ptr + 1;
         gen_uc_tracecode(tcg_ctx, 0xf8f8f8f8, UC_HOOK_BLOCK_IDX, env->uc, pc_start);
     } else {
